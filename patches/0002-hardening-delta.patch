@@ -1,0 +1,167 @@
+--- a/libraries/nestjs-libraries/src/integrations/social/instagram.provider.ts	2026-11-12 20:49:21
++++ b/libraries/nestjs-libraries/src/integrations/social/instagram.provider.ts	2026-11-12 20:49:21
+@@ -62,19 +62,41 @@
+   }
+ 
+   private get unifiedLoginRedirectUri() {
+-    return `${
+-      process?.env.FRONTEND_URL?.indexOf('https') == -1
+-        ? `https://redirectmeto.com/${process?.env.FRONTEND_URL}`
+-        : `${process?.env.FRONTEND_URL}`
+-    }/integrations/social/instagram`;
++    // HARDENING: no third-party redirect relay. The callback must be an https
++    // origin we control (for local tests: a locally trusted https address).
++    const origin = process.env.FRONTEND_URL || '';
++    if (!/^https:\/\/[^\/?#@\s]+$/.test(origin)) {
++      throw new Error(
++        'Instagram Unified Login needs FRONTEND_URL to be an https origin without a path (no third-party redirect relay is used).'
++      );
++    }
++    return `${origin}/integrations/social/instagram`;
+   }
+ 
+-  private async graphRequest(url: string) {
+-    const response = await fetch(url);
++  private async graphRequest(
++    url: string,
++    opts: { bearer?: string; form?: Record<string, string> } = {}
++  ) {
++    // HARDENING: tokens and secrets travel in the Authorization header or a
++    // POST body, never in the URL; redirects are refused; 15 s timeout.
++    const response = await fetch(url, {
++      method: opts.form ? 'POST' : 'GET',
++      headers: {
++        ...(opts.bearer ? { Authorization: `Bearer ${opts.bearer}` } : {}),
++        ...(opts.form
++          ? { 'Content-Type': 'application/x-www-form-urlencoded' }
++          : {}),
++      },
++      ...(opts.form ? { body: new URLSearchParams(opts.form).toString() } : {}),
++      redirect: 'error',
++      signal: AbortSignal.timeout(15000),
++    });
+     const body = await response.json().catch(() => ({}));
+     if (!response.ok || body?.error) {
+       throw new Error(
+-        body?.error?.message || `Meta Graph API error (${response.status})`
++        `Meta Graph API error (${response.status}${
++          body?.error?.code ? `, code ${body.error.code}` : ''
++        }): ${String(body?.error?.message || 'request failed').slice(0, 200)}`
+       );
+     }
+     return body;
+@@ -600,11 +622,15 @@
+     let accessToken: string;
+     try {
+       ({ access_token: accessToken } = await this.graphRequest(
+-        `https://graph.facebook.com/${META_GRAPH_API_VERSION}/oauth/access_token` +
+-          `?client_id=${process.env.FACEBOOK_APP_ID}` +
+-          `&redirect_uri=${encodeURIComponent(this.unifiedLoginRedirectUri)}` +
+-          `&client_secret=${process.env.FACEBOOK_APP_SECRET}` +
+-          `&code=${params.code}`
++        `https://graph.facebook.com/${META_GRAPH_API_VERSION}/oauth/access_token`,
++        {
++          form: {
++            client_id: process.env.FACEBOOK_APP_ID!,
++            redirect_uri: this.unifiedLoginRedirectUri,
++            client_secret: process.env.FACEBOOK_APP_SECRET!,
++            code: params.code,
++          },
++        }
+       ));
+     } catch (err) {
+       return (err as Error).message;
+@@ -619,9 +645,11 @@
+     let data: any;
+     try {
+       ({ data } = await this.graphRequest(
+-        `https://graph.facebook.com/${META_GRAPH_API_VERSION}/debug_token` +
+-          `?input_token=${accessToken}` +
+-          `&access_token=${process.env.FACEBOOK_APP_ID}|${process.env.FACEBOOK_APP_SECRET}`
++        `https://graph.facebook.com/${META_GRAPH_API_VERSION}/debug_token`,
++        {
++          form: { input_token: accessToken },
++          bearer: `${process.env.FACEBOOK_APP_ID}|${process.env.FACEBOOK_APP_SECRET}`,
++        }
+       ));
+     } catch (err) {
+       return (err as Error).message;
+@@ -629,11 +657,15 @@
+ 
+     this.checkScopes(this.unifiedLoginScopes, data?.scopes || []);
+ 
+-    const { id, name } = await (
+-      await fetch(
+-        `https://graph.facebook.com/${META_GRAPH_API_VERSION}/me?fields=id,name&access_token=${accessToken}`
+-      )
+-    ).json();
++    let id: string | undefined, name: string | undefined;
++    try {
++      ({ id, name } = await this.graphRequest(
++        `https://graph.facebook.com/${META_GRAPH_API_VERSION}/me?fields=id,name`,
++        { bearer: accessToken }
++      ));
++    } catch (err) {
++      return (err as Error).message;
++    }
+ 
+     if (!id && !data?.user_id) {
+       return 'Could not read the Meta system user for this token';
+@@ -656,18 +688,21 @@
+     const accounts: { id: string; username?: string }[] = [];
+     const seen = new Set<string>();
+ 
+-    let nextUrl: string | undefined =
+-      `https://graph.facebook.com/${META_GRAPH_API_VERSION}/me/assigned_instagram_accounts` +
+-      `?fields=id,username&limit=100&access_token=${accessToken}`;
+-    while (nextUrl) {
+-      const response: any = await this.graphRequest(nextUrl);
++    let after: string | undefined;
++    for (let page = 0; page < 20; page++) {
++      const response: any = await this.graphRequest(
++        `https://graph.facebook.com/${META_GRAPH_API_VERSION}/me/assigned_instagram_accounts?fields=id,username&limit=100` +
++          (after ? `&after=${encodeURIComponent(after)}` : ''),
++        { bearer: accessToken }
++      );
+       for (const account of response.data || []) {
+         if (account?.id && !seen.has(account.id)) {
+           seen.add(account.id);
+           accounts.push(account);
+         }
+       }
+-      nextUrl = response.paging?.next;
++      after = response.paging?.next ? response.paging?.cursors?.after : undefined;
++      if (!after) break;
+     }
+ 
+     // When the Meta app and the Instagram account belong to the same business
+@@ -683,7 +718,8 @@
+       for (const fallbackId of fallbackIds) {
+         try {
+           const account = await this.graphRequest(
+-            `https://graph.facebook.com/${META_GRAPH_API_VERSION}/${fallbackId}?fields=id,username&access_token=${accessToken}`
++            `https://graph.facebook.com/${META_GRAPH_API_VERSION}/${fallbackId}?fields=id,username`,
++            { bearer: accessToken }
+           );
+           if (account?.id && !seen.has(String(account.id))) {
+             seen.add(String(account.id));
+@@ -701,7 +737,8 @@
+     return Promise.all(
+       accounts.map(async (account) => {
+         const info = await this.graphRequest(
+-          `https://graph.facebook.com/${META_GRAPH_API_VERSION}/${account.id}?fields=username,name,profile_picture_url&access_token=${accessToken}`
++          `https://graph.facebook.com/${META_GRAPH_API_VERSION}/${account.id}?fields=username,name,profile_picture_url`,
++          { bearer: accessToken }
+         ).catch(() => ({} as any));
+ 
+         return {
+@@ -819,7 +856,8 @@
+       // for both parts to keep the stored "pageToken___userToken" format
+       const { id, name, profile_picture_url, username } =
+         await this.graphRequest(
+-          `https://graph.facebook.com/${META_GRAPH_API_VERSION}/${data.id}?fields=id,username,name,profile_picture_url&access_token=${accessToken}`
++          `https://graph.facebook.com/${META_GRAPH_API_VERSION}/${data.id}?fields=id,username,name,profile_picture_url`,
++          { bearer: accessToken }
+         );
+ 
+       return {

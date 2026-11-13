@@ -1,0 +1,59 @@
+# Build the Postiz image for linux/arm64 with the reviewed Instagram Unified Login patch applied.
+# Manual trigger only. No secrets, no Meta credentials, no registry push: the image is saved as a build artifact.
+name: build-arm64-unified
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    env:
+      UPSTREAM_COMMIT: a5affe62c74e39c1e7ac960d50d8418b807d532c
+    steps:
+      - name: Check out the repository (pinned action)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Verify the source is exactly upstream v2.25.3 plus only the files we added
+        run: |
+          UP="$(cat UPSTREAM_COMMIT.txt)"
+          git fetch --no-tags origin "$UP" 2>/dev/null || true
+          git cat-file -e "$UP^{commit}"
+          CHANGED="$(git diff --name-only "$UP" HEAD | grep -v -E '^(\.github/workflows/build-arm64\.yml|patches/|UPSTREAM_COMMIT\.txt|README-FORK\.md)' || true)"
+          if [ -n "$CHANGED" ]; then echo "Unexpected differences from upstream:"; echo "$CHANGED"; exit 1; fi
+          echo "source matches upstream $UP"
+      - name: Verify the two patch files are exactly the reviewed ones
+        working-directory: patches
+        run: sha256sum -c SHA256SUMS
+      - name: Apply the patches
+        run: |
+          git apply --check patches/0001-pr2404-feature-only.patch
+          git apply patches/0001-pr2404-feature-only.patch
+          git apply --check patches/0002-hardening-delta.patch
+          git apply patches/0002-hardening-delta.patch
+          git diff --stat
+      - name: Free disk space (the build needs it)
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android 2>/dev/null || true
+          docker system prune -af >/dev/null 2>&1 || true
+          df -h /
+      - name: Build the image (native arm64)
+        run: |
+          docker build -f Dockerfile.dev --build-arg NEXT_PUBLIC_VERSION=v2.25.3-unified.1 -t postiz-instagram-unified:v2.25.3-unified.1-arm64 .
+          docker image inspect postiz-instagram-unified:v2.25.3-unified.1-arm64 --format '{{.Architecture}} {{.Size}}'
+      - name: Save the image as one file
+        run: |
+          docker save postiz-instagram-unified:v2.25.3-unified.1-arm64 | gzip -1 > postiz-unified-arm64.tar.gz
+          sha256sum postiz-unified-arm64.tar.gz | tee postiz-unified-arm64.tar.gz.sha256
+          ls -l postiz-unified-arm64.tar.gz
+      - name: Keep it for 3 days (pinned action)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: postiz-unified-arm64
+          path: |
+            postiz-unified-arm64.tar.gz
+            postiz-unified-arm64.tar.gz.sha256
+          retention-days: 3
