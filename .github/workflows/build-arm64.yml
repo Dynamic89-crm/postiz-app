@@ -33,7 +33,18 @@ jobs:
           git apply patches/0001-pr2404-feature-only.patch
           git apply --check patches/0002-hardening-delta.patch
           git apply patches/0002-hardening-delta.patch
+          git apply --check patches/0003-debug-token-get.patch
+          git apply patches/0003-debug-token-get.patch
           git diff --stat
+      - name: Regression tests for the Unified Login token exchange (mocked, dummy credentials only)
+        run: |
+          mkdir -p "$RUNNER_TEMP/harness" && cd "$RUNNER_TEMP/harness"
+          npm init -y >/dev/null
+          npm i --no-audit --no-fund esbuild@0.25.5 dayjs@1.11.13
+          cd "$GITHUB_WORKSPACE"
+          HARNESS_REQUIRE="$RUNNER_TEMP/harness/package.json" \
+          PROVIDER_PATH="$GITHUB_WORKSPACE/libraries/nestjs-libraries/src/integrations/social/instagram.provider.ts" \
+          node --test patches/tests/instagram-unified-login.test.mjs
       - name: Free disk space (the build needs it)
         run: |
           df -h /
@@ -42,18 +53,18 @@ jobs:
           df -h /
       - name: Build the image (native arm64)
         run: |
-          docker build -f Dockerfile.dev --build-arg NEXT_PUBLIC_VERSION=v2.25.3-unified.1 -t postiz-instagram-unified:v2.25.3-unified.1-arm64 .
-          docker image inspect postiz-instagram-unified:v2.25.3-unified.1-arm64 --format '{{.Architecture}} {{.Size}}'
+          docker build -f Dockerfile.dev --build-arg NEXT_PUBLIC_VERSION=v2.25.3-unified.2 -t postiz-instagram-unified:v2.25.3-unified.2-arm64 .
+          docker image inspect postiz-instagram-unified:v2.25.3-unified.2-arm64 --format '{{.Architecture}} {{.Size}}'
       - name: Save the image as one file
         run: |
-          docker save postiz-instagram-unified:v2.25.3-unified.1-arm64 | gzip -1 > postiz-unified-arm64.tar.gz
+          docker save postiz-instagram-unified:v2.25.3-unified.2-arm64 | gzip -1 > postiz-unified-arm64.tar.gz
           sha256sum postiz-unified-arm64.tar.gz | tee postiz-unified-arm64.tar.gz.sha256
           ls -l postiz-unified-arm64.tar.gz
-      - name: Keep it for 3 days (pinned action)
+      - name: Keep it for 7 days (pinned action)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: postiz-unified-arm64
+          name: postiz-unified-arm64-v2
           path: |
             postiz-unified-arm64.tar.gz
             postiz-unified-arm64.tar.gz.sha256
-          retention-days: 3
+          retention-days: 7

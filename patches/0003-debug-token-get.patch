@@ -1,0 +1,46 @@
+diff --git a/libraries/nestjs-libraries/src/integrations/social/instagram.provider.ts b/libraries/nestjs-libraries/src/integrations/social/instagram.provider.ts
+index e2b8b48..18f5680 100644
+--- a/libraries/nestjs-libraries/src/integrations/social/instagram.provider.ts
++++ b/libraries/nestjs-libraries/src/integrations/social/instagram.provider.ts
+@@ -75,10 +75,20 @@ export class InstagramProvider
+ 
+   private async graphRequest(
+     url: string,
+-    opts: { bearer?: string; form?: Record<string, string> } = {}
++    opts: {
++      bearer?: string;
++      form?: Record<string, string>;
++      query?: Record<string, string>;
++    } = {}
+   ) {
+     // HARDENING: tokens and secrets travel in the Authorization header or a
+     // POST body, never in the URL; redirects are refused; 15 s timeout.
++    // The one exception is `query` (GET-only endpoints such as debug_token,
++    // which Meta documents as GET with input_token in the query string); it is
++    // sent over https and never logged, error messages never contain the URL.
++    if (opts.query) {
++      url += (url.includes('?') ? '&' : '?') + new URLSearchParams(opts.query);
++    }
+     const response = await fetch(url, {
+       method: opts.form ? 'POST' : 'GET',
+       headers: {
+@@ -647,7 +657,7 @@ export class InstagramProvider
+       ({ data } = await this.graphRequest(
+         `https://graph.facebook.com/${META_GRAPH_API_VERSION}/debug_token`,
+         {
+-          form: { input_token: accessToken },
++          query: { input_token: accessToken },
+           bearer: `${process.env.FACEBOOK_APP_ID}|${process.env.FACEBOOK_APP_SECRET}`,
+         }
+       ));
+@@ -655,6 +665,10 @@ export class InstagramProvider
+       return (err as Error).message;
+     }
+ 
++    if (data?.is_valid === false || data?.error) {
++      return 'Meta reports that the Instagram token is not valid';
++    }
++
+     this.checkScopes(this.unifiedLoginScopes, data?.scopes || []);
+ 
+     let id: string | undefined, name: string | undefined;

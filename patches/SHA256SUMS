@@ -1,2 +1,4 @@
 7cb1586bc119cc81b174143b2ccd0643109365725d67fd0906716d35e4759f69  0001-pr2404-feature-only.patch
 64db65fdceb5eae15ba728aa96b1555179bfad20676f265f427fa8f2aec5867a  0002-hardening-delta.patch
+efa3af3e6d5976460d7b81e53b9edc35f8e046f4d721224fb2e718901dc6f2bc  0003-debug-token-get.patch
+c06f1ad86d679b22fe29e6be56a6b7809578b3d66a6796f2fc2840b6af4d5e1d  tests/instagram-unified-login.test.mjs
